@@ -1,0 +1,30 @@
+{
+  "meals": [
+    {
+      "id": "3301",
+      "type": "recipe",
+      "recipeId": "5501",
+      "title": "Pannkakor",
+      "portions": "5/2",
+      "occasion": "fredag",
+      "isPurchased": false,
+      "isCooked": false,
+      "ingredients": [
+        "3 dl vetemjöl",
+        "6 dl mjölk",
+        "3 ägg"
+      ]
+    },
+    {
+      "id": "3302",
+      "type": "title",
+      "recipeId": null,
+      "title": "Tacos",
+      "portions": null,
+      "occasion": null,
+      "isPurchased": true,
+      "isCooked": false,
+      "ingredients": []
+    }
+  ]
+}

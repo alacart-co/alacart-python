@@ -1,0 +1,7 @@
+{
+  "type": "https://api.test.alacart.io/docs#errors-unavailable",
+  "title": "Unavailable",
+  "status": 503,
+  "code": "unavailable",
+  "detail": "The suggestion service did not answer in time."
+}

@@ -1,0 +1,8 @@
+{
+  "type": "https://api.test.alacart.io/docs#errors-recipe_import_failed",
+  "title": "The recipe could not be added",
+  "status": 422,
+  "code": "recipe_import_failed",
+  "detail": "The API does not add recipes from that site.",
+  "reason": "site_not_supported"
+}

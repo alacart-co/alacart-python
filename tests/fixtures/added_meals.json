@@ -1,0 +1,14 @@
+{
+  "meals": [
+    {
+      "id": "3303",
+      "type": "recipe",
+      "recipeId": "5502",
+      "title": "Linsgryta",
+      "portions": "4",
+      "occasion": "söndag",
+      "isPurchased": false,
+      "isCooked": false
+    }
+  ]
+}

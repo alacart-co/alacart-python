@@ -1,0 +1,7 @@
+{
+  "type": "https://api.test.alacart.io/docs#errors-invalid_token",
+  "title": "Invalid token",
+  "status": 401,
+  "code": "invalid_token",
+  "detail": "The access token has expired."
+}

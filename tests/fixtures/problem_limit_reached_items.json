@@ -1,0 +1,20 @@
+{
+  "type": "https://api.test.alacart.io/docs#errors-limit_reached",
+  "title": "The list is full",
+  "status": 409,
+  "code": "limit_reached",
+  "detail": "The list holds as many items as it may.",
+  "limit": 500,
+  "items": [
+    {
+      "id": "77004",
+      "listId": "9001",
+      "text": "ägg",
+      "isChecked": false,
+      "isPermanent": false,
+      "addedAt": "2026-11-02T16:04:11Z",
+      "updatedAt": "2026-11-02T16:04:11Z",
+      "mergedIntoExisting": false
+    }
+  ]
+}

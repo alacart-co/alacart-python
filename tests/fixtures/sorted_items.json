@@ -1,0 +1,50 @@
+{
+  "departments": [
+    {
+      "items": [
+        {
+          "id": "77010",
+          "listId": "9001",
+          "text": "bananer",
+          "isChecked": false,
+          "isPermanent": false,
+          "addedAt": "2026-11-02T16:04:11Z",
+          "updatedAt": "2026-11-02T16:04:11Z"
+        }
+      ]
+    },
+    {
+      "items": [
+        {
+          "id": "77003",
+          "listId": "9001",
+          "text": "2 l mjölk",
+          "isChecked": false,
+          "isPermanent": false,
+          "addedAt": "2026-11-02T16:04:11Z",
+          "updatedAt": "2026-11-02T16:04:11Z"
+        },
+        {
+          "id": "77011",
+          "listId": "9001",
+          "text": "smör",
+          "isChecked": false,
+          "isPermanent": false,
+          "addedAt": "2026-11-02T16:04:11Z",
+          "updatedAt": "2026-11-02T16:04:11Z"
+        }
+      ]
+    }
+  ],
+  "unplacedItems": [
+    {
+      "id": "77012",
+      "listId": "9001",
+      "text": "present till mormor",
+      "isChecked": false,
+      "isPermanent": false,
+      "addedAt": "2026-11-02T16:04:11Z",
+      "updatedAt": "2026-11-02T16:04:11Z"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "type": "https://api.test.alacart.io/docs#errors-conflict",
+  "title": "Conflict",
+  "status": 409,
+  "code": "conflict",
+  "detail": "Another list has that name."
+}

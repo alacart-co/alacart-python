@@ -1,0 +1,7 @@
+{
+  "type": "https://api.test.alacart.io/docs#errors-not_found",
+  "title": "Not found",
+  "status": 404,
+  "code": "not_found",
+  "detail": "The list does not exist."
+}

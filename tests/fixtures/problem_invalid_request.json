@@ -1,0 +1,12 @@
+{
+  "type": "https://api.test.alacart.io/docs#errors-invalid_request",
+  "title": "Invalid request",
+  "status": 400,
+  "code": "invalid_request",
+  "detail": "The request has invalid fields.",
+  "errors": {
+    "texts[2]": [
+      "The text must be at most 200 characters."
+    ]
+  }
+}

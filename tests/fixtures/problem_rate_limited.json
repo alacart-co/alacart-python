@@ -1,0 +1,7 @@
+{
+  "type": "https://api.test.alacart.io/docs#errors-rate_limited",
+  "title": "Too many requests",
+  "status": 429,
+  "code": "rate_limited",
+  "detail": "Wait before you send more requests."
+}

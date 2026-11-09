@@ -1,0 +1,3788 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Alacart API",
+    "description": "# Getting started\n\nThe Alacart API lets your app read and change a user's shopping lists, items, recipe box and meal\nplan, and read the user's stores. Your app acts for one user at a time, and that user must have premium. The user signs in to\nAlacart and approves your app, so your app never sees their password.\n\nTo call the API, follow these steps:\n\n1. Register your app on the developer page of the Alacart web app, which the profile page links\n   to. Registering an app needs premium. Each app gets a client id, which works only in the\n   environment where you registered it. Choose a confidential app when it runs on a server that\n   can keep a secret. It also gets a client secret, and the page shows the secret only once. Choose\n   a public app for a mobile app, a browser app or a script. Both kinds sign in with PKCE.\n2. Sign the user in with the OAuth 2.0 authorization code flow and PKCE.\n   [Signing in](#description/signing-in) shows each request.\n3. Send each call with the access token in the `Authorization` header.\n\n```sh\ncurl https://api.alacart.io/v1/item-lists \\\n  -H \"Authorization: Bearer $ACCESS_TOKEN\"\n```\n\n## Hosts\n\nThe API has two hosts:\n\n- `https://api.alacart.io` will serve the users of the app once the API launches there. Until\n  then, the beta host alone serves it.\n- `https://api.test.alacart.io` is the beta host, with its own accounts and data. Test your app there,\n  with a beta account that the Alacart team has given premium.\n\nUsers sign in to your app at an authorization server of the same environment. It is\n`https://auth.alacart.io` for production and `https://auth.test.alacart.io` for beta. A token from\none environment does not work in the other. The examples use the production hosts.\n\n## Conventions\n\n- Every path starts with `/v1/`.\n- Ids are JSON strings. Treat them as opaque text, even when they look like numbers.\n- JSON names are camelCase. Values that come from a fixed list, such as an error code or a sort\n  order, are snake_case.\n- Timestamps are UTC in the RFC 3339 format with whole seconds, such as `2026-10-25T07:21:39Z`.\n- A collection comes wrapped in an object, as in `{ \"items\": [...] }`.\n- Some fields cost more to compute, or few apps need them. An answer carries such a field only when\n  the request names it in the `include` parameter, as in `include=ingredients`. The reference marks\n  these fields as optional.\n- Every other field is always there. A value the API does not know is `null`.\n- `GET /v1/item-lists` and `GET /v1/items` send an `ETag` header. Send it back in `If-None-Match`,\n  and an answer that has not changed comes back as `304 Not Modified` without a body.\n- Browsers on every origin may call the API, without cookies.\n\n## Changing data\n\nEndpoints that change data need the `write` scope, which\n[Scopes and consent](#description/scopes-and-consent) describes. They follow these rules:\n\n- A request sends its body as JSON, with `Content-Type: application/json`. A body may hold at most\n  64 KB, which is 65,536 bytes.\n- `PATCH` changes only the fields that the body holds, and keeps the others. The body must hold at\n  least one field.\n- An answer that creates a list, a recipe or meals is `201 Created` with what it created.\n  `POST /v1/items` answers `200 OK`, because a text can merge into an item already on the list.\n- An answer to `DELETE`, and to a change that returns nothing, is `204 No Content` without a body.\n- `POST /v1/items` and `POST /v1/meal-plans/active/meals` take several entries in one call. They\n  check every entry before they add any. A list can still fill up partway, and the problem then\n  lists what the call added, as [Errors](#description/errors) describes.\n- A `POST` can have gone through even when the app got no answer, or got `server_error`. Read the\n  data again before you repeat it, because a repeated text adds to the item it merged into.\n- Deleting a list or a recipe cannot be undone.\n\nThis call adds two items to the user's default list:\n\n```sh\ncurl https://api.alacart.io/v1/items \\\n  -H \"Authorization: Bearer $ACCESS_TOKEN\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{ \"texts\": [\"2 l mjölk\", \"bananer\"] }'\n```\n\nThe body takes up to 50 texts, and `listId` picks another list than the default one. The API\nmerges a text into an item already on the list when the two name the same thing. The answer holds\none entry per text, and each entry's `mergedIntoExisting` says whether its text merged.\n\n# Signing in\n\nYour app gets its tokens through the OAuth 2.0 authorization code flow with PKCE. Every app uses\nPKCE, whether it has a client secret or not. The authorization server has a host of its own, apart\nfrom the API:\n\n| Environment | Authorization server | API |\n| --- | --- | --- |\n| Production | `https://auth.alacart.io` | `https://api.alacart.io` |\n| Beta | `https://auth.test.alacart.io` | `https://api.test.alacart.io` |\n\nThe examples use the production hosts. The authorization server publishes its endpoints at\n`/.well-known/oauth-authorization-server`, which is\n`https://auth.test.alacart.io/.well-known/oauth-authorization-server` on beta. An OAuth library can\nread them from there.\n\n## Send the user to the authorization endpoint\n\nCreate a random code verifier, and derive its S256 code challenge. Then open this address in the\nuser's browser:\n\n```\nhttps://auth.alacart.io/connect/authorize\n  ?response_type=code\n  &client_id=YOUR_CLIENT_ID\n  &redirect_uri=YOUR_REDIRECT_URI\n  &scope=read%20write\n  &code_challenge=CODE_CHALLENGE\n  &code_challenge_method=S256\n  &state=RANDOM_STATE\n```\n\nThe parameters work like this:\n\n- `redirect_uri` must be one of the redirect URIs you registered for the app. An app may register\n  a loopback URI, such as `http://127.0.0.1/callback`, a URI with its own app scheme, or an HTTPS\n  URI. For a loopback URI, your app may listen on any port.\n- `scope` is `read`, or `read write` when the app needs to change anything.\n  [Scopes and consent](#description/scopes-and-consent) explains the difference.\n- `state` is a random value that your app checks when the browser comes back.\n- `resource` is optional. When you send it, it must be the API's address with `/v1`, which is\n  `https://api.alacart.io/v1` in production and `https://api.test.alacart.io/v1` in beta.\n\nThe user signs in, if they have not already, and approves your app. The browser then comes back to\nyour redirect URI with `code` and `state` in the query. When the user declines, or cannot approve\nbecause their account has no premium, it comes back with `error=access_denied`.\n\n## Exchange the code for tokens\n\nSend the code to the token endpoint, with the code verifier:\n\n```sh\ncurl https://auth.alacart.io/connect/token \\\n  -d grant_type=authorization_code \\\n  -d code=CODE \\\n  -d redirect_uri=YOUR_REDIRECT_URI \\\n  -d client_id=YOUR_CLIENT_ID \\\n  -d code_verifier=CODE_VERIFIER\n```\n\nAn app with a client secret also sends it. It may use HTTP Basic authentication, or put\n`client_secret` in the form body.\n\nThe answer holds an `access_token`, which lives 60 minutes, and a `refresh_token`. Every sign-in\ncomes with a refresh token, so your app does not need to ask for `offline_access`.\n\n## Refresh the access token\n\nBefore the access token expires, ask for a new one:\n\n```sh\ncurl https://auth.alacart.io/connect/token \\\n  -d grant_type=refresh_token \\\n  -d refresh_token=REFRESH_TOKEN \\\n  -d client_id=YOUR_CLIENT_ID\n```\n\nEach refresh returns a new refresh token. The old one keeps working for 30 seconds, so an app that\nlost the answer can retry, and then it stops. Store the new one every time. A refresh token lives 90 days from the refresh that issued it. An app that keeps running\nrefreshes at least once an hour, so its user signs in again only after the app has been off for 90\ndays.\n\nWhen a call answers `invalid_token`, refresh the token and try again. When the refresh fails, sign\nthe user in again.\n\n## Sign the user out\n\nTo sign the user out of your app, revoke its refresh token:\n\n```sh\ncurl https://auth.alacart.io/connect/revoke \\\n  -d token=REFRESH_TOKEN \\\n  -d token_type_hint=refresh_token \\\n  -d client_id=YOUR_CLIENT_ID\n```\n\nYour app can then no longer refresh. The access token keeps working until it expires, at most 60\nminutes later, so delete it too.\n\nRevoking the refresh token does not disconnect your app from the user's account, and the app stays\non the profile page of the Alacart web app. Only the user can disconnect it, on that page. Its\ntokens then stop working at once.\n\n# Scopes and consent\n\nThe API has two scopes:\n\n- `read` lets the app read the user's lists, items, favorites, recipes, meal plan and stores.\n- `write` lets the app read everything that `read` allows, and change it.\n\nThe reference names the scope that each endpoint needs. An endpoint that reads takes either scope,\nand an endpoint that changes data needs `write`.\n\nWhen your app asks for `write`, the consent page shows the user a choice to allow changes. A user\nwho turns it off approves `read` alone. Your app will then get an answer with the code\n`insufficient_scope` whenever it tries to change anything. Read the scope in the token endpoint's\nanswer, and offer the user a way to sign in again when your app needs `write`.\n\nThe consent page names your app and the host of your redirect URI. It also tells the user that\nnobody at Alacart has reviewed your app.\n\nOnly an account with premium can approve an app. When the user's premium ends later, the app stays\nconnected, and every call answers `premium_required` until the user renews it. Signing in again does\nnot help, so show the user the reason.\n\nThe user can disconnect your app at any time. Its tokens then stop working, and every call answers\n`invalid_token`.\n\n# Errors\n\nEvery error answer is a problem, as RFC 9457 defines it, with the media type\n`application/problem+json`:\n\n```json\n{\n  \"type\": \"https://api.alacart.io/docs#errors-not_found\",\n  \"title\": \"The resource does not exist.\",\n  \"status\": 404,\n  \"code\": \"not_found\",\n  \"detail\": \"The user has no item list with id 42.\"\n}\n```\n\nA problem carries four of the five standard members of RFC 9457:\n\n- `type` links to the code's description below.\n- `title` describes the code in a few words. It is the same for every answer with that code.\n- `status` repeats the HTTP status.\n- `detail` describes this answer, for a developer to read.\n\nThe fifth, `instance`, never appears, because the API does not name the failed request.\n\n`title` and `detail` are not meant for your users.\n\nThe API adds extension members, which RFC 9457 allows:\n\n- `code` comes with every problem. Branch on it, because it never changes once it ships.\n- `errors` comes with `invalid_request` when the request got a parameter or a body field wrong.\n  Each key names one, and its value lists what is wrong with it. A key names an entry of an array\n  by its index, as in `texts[2]` or `meals[1].portions`. An answer whose fault no single parameter\n  or field carries has no `errors`.\n- `limit` comes with `limit_reached`, and gives the most items a list may hold.\n- `items` comes with `limit_reached` from `POST /v1/items`. It lists the entries that the call\n  added before the list filled up, which can be none.\n- `meals` comes with `limit_reached` from `POST /v1/meal-plans/active/meals`. It lists every meal\n  that the call put in the plan. That includes the meal whose ingredients filled the list, which\n  keeps the ingredients added before the list filled.\n- `reason` comes with `recipe_import_failed`, and says why the API could not add the recipe.\n\n`invalid_request` with `errors` looks like this:\n\n```json\n{\n  \"type\": \"https://api.alacart.io/docs#errors-invalid_request\",\n  \"title\": \"The request is not valid.\",\n  \"status\": 400,\n  \"code\": \"invalid_request\",\n  \"detail\": \"The limit must be from 1 to 100.\",\n  \"errors\": {\n    \"limit\": [\"The limit must be from 1 to 100.\"]\n  }\n}\n```\n\nLater releases may add codes and members. Treat a code you do not know by its HTTP status.\n\n## Error codes\n\n### invalid_request\n\nStatus 400. A parameter or body field is missing or invalid. `errors` names the one the API found,\nwhen it can single one out. A body can hold more faults than the answer names, so fix the request\nbefore you send it again.\n\n### invalid_token\n\nStatus 401. The token is missing, expired or revoked. A token for another API, or for an account\nthat no longer exists, gets it too. The `WWW-Authenticate` header says the same. Refresh the token,\nor sign the user in again when the refresh fails.\n\n### insufficient_scope\n\nStatus 403. The token's scopes do not allow the call, such as a change when the user allowed\nreading only. The `WWW-Authenticate` header names the scope `write`. Signing the user in again,\nwith `write` in the request, lets the user allow changes.\n\n### premium_required\n\nStatus 403. The account has no premium. The user can renew it in the app, and signing in again does\nnot help.\n\n### not_found\n\nStatus 404. The id does not exist, or it belongs to another user, or the path does not exist. An id\nthat the API never issued, such as `abc`, gets it too.\n\n### method_not_allowed\n\nStatus 405. The path does not take that method. The `Allow` header lists the methods it takes.\n\n### payload_too_large\n\nStatus 413. The body is larger than 64 KB, which is 65,536 bytes. Split the change into smaller\ncalls.\n\n### unsupported_media_type\n\nStatus 415. The body is not JSON. Send it with `Content-Type: application/json`.\n\n### limit_reached\n\nStatus 409. The list holds as many items as it may, and `limit` says how many. A call that adds\nseveral entries may have added some before the list filled up, and `items` or `meals` lists them.\nA change of a meal's portions can also fill the list. Its problem carries neither member, so read\nthe meal plan again to see what changed. The user removes items before the app adds more.\n\nRead the members of `limit_reached` to tell the user what the call did before the list filled\nup:\n\n```json\n{\n  \"type\": \"https://api.alacart.io/docs#errors-limit_reached\",\n  \"title\": \"The list is full.\",\n  \"status\": 409,\n  \"code\": \"limit_reached\",\n  \"detail\": \"The list is full. A list can hold at most 200 items.\",\n  \"limit\": 200,\n  \"items\": []\n}\n```\n\n### conflict\n\nStatus 409. The change clashes with the user's own data. These changes get it:\n\n- a list with the name of another of the user's lists;\n- deleting the account's last shared list, or making it private;\n- making a list that another person shares with the user visible to the account;\n- deleting a recipe with a meal in the active meal plan, or a meal the user cooked in the last\n  few days.\n\n### recipe_import_failed\n\nStatus 422. The API could not add the recipe on the web page. `reason` is one of these:\n\n- `site_not_supported`: the API does not add recipes from that site.\n- `site_denies_import`: the recipe site does not allow the API to add its recipes.\n- `unreadable_page`: the page's HTML is broken, so the API cannot read it.\n- `multiple_recipes_found`: the page has more than one recipe.\n- `no_recipe_found`: the API found no recipe on the page.\n- `other`: the API could not read the recipe for another reason.\n\nLater releases may add reasons. Treat a reason you do not know as `other`.\n\n### rate_limited\n\nStatus 429. Your app sent too many requests. Wait the number of seconds that `Retry-After` gives.\n[Rate limits](#description/rate-limits) describes the limits.\n\n### server_error\n\nStatus 500. The API failed. Try again later.\n\n### unavailable\n\nStatus 503. A service that the call needs is down or slow. Wait the number of seconds that\n`Retry-After` gives.\n\n# Rate limits\n\nEach user may make 60 requests a minute through your app. Design your app to make as few requests as it can, and to fetch only what it\nneeds. The limit is a maximum, not a budget to use up. Alacart may lower it if apps use too much.\n\nTwo more limits guard the API against bursts:\n\n- One token may make 6 requests a second, after a burst of 30.\n- One IP address may make 60 requests a second.\n\nA request over any of these limits gets the code `rate_limited` and a `Retry-After` header, which\nsays how many seconds to wait. Every request counts, also one that gets `304 Not Modified`.\n\nThese habits keep an app well within the limits:\n\n- Poll no more often than you need. Shopping lists change slowly, and once every few minutes is\n  enough for a list on a screen.\n- Send the last `ETag` in `If-None-Match`. An answer that has not changed then costs no body.\n- Read every list's items with one call to `GET /v1/items`. Prefer to pass `listId` when you\n  show a single list, so the API loads that list alone.\n- Ask for item suggestions only when the user pauses typing, because each call counts.\n- Add several items with one call to `POST /v1/items`, and plan several meals with one call to\n  `POST /v1/meal-plans/active/meals`.\n\n# Versioning\n\nVersion 1 of the API lives under `/v1/`. It changes only in ways that keep existing apps working.\nA later release of v1 may add any of these:\n\n- new endpoints;\n- new optional parameters;\n- new response fields;\n- new values of a field with fixed values, such as a meal's `type`;\n- new error codes and problem members.\n\nYour app must ignore a field it does not know. It must also handle a value it does not know\nwithout failing, for example by skipping that entry.\n\nA change that would break an app goes into a new version under `/v2/`. Version 1 then keeps\nrunning for at least six months. Its answers carry a `Deprecation` header, and a `Sunset` header\nwith the date it stops.",
+    "version": "1"
+  },
+  "servers": [
+    {
+      "url": "https://api.alacart.io",
+      "description": "Production"
+    },
+    {
+      "url": "https://api.test.alacart.io",
+      "description": "Beta, for testing an app"
+    }
+  ],
+  "paths": {
+    "/v1/me": {
+      "get": {
+        "tags": [
+          "Account"
+        ],
+        "summary": "Returns the account the token acts for.",
+        "description": "Scope: `read`.",
+        "operationId": "getMe",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid_token`: The access token is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`premium_required`: The account has no premium.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: The app sent too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server_error`: The API failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "read"
+            ]
+          },
+          {
+            "oauth2": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/stores": {
+      "get": {
+        "tags": [
+          "Stores"
+        ],
+        "summary": "Returns the stores the user has shopped in or marked as favorites.",
+        "description": "Scope: `read`.",
+        "operationId": "getStores",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreCollection"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid_token`: The access token is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`premium_required`: The account has no premium.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: The app sent too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server_error`: The API failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "read"
+            ]
+          },
+          {
+            "oauth2": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/item-lists": {
+      "get": {
+        "tags": [
+          "Item lists"
+        ],
+        "summary": "Returns the user's shopping lists.",
+        "description": "The answer includes the lists that others share with the user. It sends an `ETag`. Scope: `read`.",
+        "operationId": "getItemLists",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemListCollection"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The answer has not changed since the ETag that `If-None-Match` names. The body is empty."
+          },
+          "401": {
+            "description": "`invalid_token`: The access token is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`premium_required`: The account has no premium.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: The app sent too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server_error`: The API failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "read"
+            ]
+          },
+          {
+            "oauth2": [
+              "write"
+            ]
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Item lists"
+        ],
+        "summary": "Creates a shopping list.",
+        "description": "A second list with the same name gets `conflict`. Scope: `write`.",
+        "operationId": "createItemList",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewItemList"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_request`: The request is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid_token`: The access token is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`insufficient_scope`: The user allowed reading only. `premium_required`: The account has no premium.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`conflict`: The change clashes with existing data.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`: The body is too large.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: The body is not JSON.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: The app sent too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server_error`: The API failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/item-lists/{listId}/sorted": {
+      "get": {
+        "tags": [
+          "Item lists"
+        ],
+        "summary": "Returns a list's items grouped by a store's departments.",
+        "description": "The departments come in the order the user walks through the store. Scope: `read`.",
+        "operationId": "getSortedItems",
+        "parameters": [
+          {
+            "name": "listId",
+            "in": "path",
+            "description": "The list's id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "storeId",
+            "in": "query",
+            "description": "Required. The id of a store from `GET /v1/stores`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SortedItems"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_request`: The request is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid_token`: The access token is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`premium_required`: The account has no premium.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: The app sent too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server_error`: The API failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "read"
+            ]
+          },
+          {
+            "oauth2": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/items": {
+      "get": {
+        "tags": [
+          "Items"
+        ],
+        "summary": "Returns the items on the user's lists.",
+        "description": "The answer sends an `ETag`. Scope: `read`.",
+        "operationId": "getItems",
+        "parameters": [
+          {
+            "name": "listId",
+            "in": "query",
+            "description": "Optional. Narrows the answer to one list. Without it, the answer holds the items of every list.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "Optional. `added`, the default, puts the most recently added items first. `manual` follows the order the user set by hand, and needs `listId`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemCollection"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The answer has not changed since the ETag that `If-None-Match` names. The body is empty."
+          },
+          "400": {
+            "description": "`invalid_request`: The request is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid_token`: The access token is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`premium_required`: The account has no premium.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: The app sent too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server_error`: The API failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "read"
+            ]
+          },
+          {
+            "oauth2": [
+              "write"
+            ]
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Items"
+        ],
+        "summary": "Adds items to a shopping list.",
+        "description": "The API merges a text into an item already on the list when the two name the same\nthing. The endpoint checks every text before it adds any. When the list fills up\npartway, the answer is `limit_reached`, and its `items` member lists the entries added\nbefore that. Scope: `write`.",
+        "operationId": "addItems",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewItems"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddedItemCollection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_request`: The request is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid_token`: The access token is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`insufficient_scope`: The user allowed reading only. `premium_required`: The account has no premium.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`limit_reached`: The list is full.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`: The body is too large.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: The body is not JSON.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: The app sent too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server_error`: The API failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/items/favorites": {
+      "get": {
+        "tags": [
+          "Items"
+        ],
+        "summary": "Returns the items the user buys often.",
+        "description": "The app can suggest them when the user adds items. Scope: `read`.",
+        "operationId": "getFavoriteItems",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FavoriteCollection"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid_token`: The access token is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`premium_required`: The account has no premium.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: The app sent too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server_error`: The API failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "read"
+            ]
+          },
+          {
+            "oauth2": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/items/suggestions": {
+      "get": {
+        "tags": [
+          "Items"
+        ],
+        "summary": "Returns item texts that complete what the user has typed.",
+        "description": "The suggestions come in the order the suggestion service ranks them. Each call counts\nagainst the rate limit, so an app should wait until the user pauses typing. Scope: `read`.",
+        "operationId": "getItemSuggestions",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "description": "Required. From 1 to 100 characters.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuggestionCollection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_request`: The request is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid_token`: The access token is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`premium_required`: The account has no premium.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: The app sent too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server_error`: The API failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`unavailable`: A service that the call needs is unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "read"
+            ]
+          },
+          {
+            "oauth2": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/item-lists/{listId}": {
+      "patch": {
+        "tags": [
+          "Item lists"
+        ],
+        "summary": "Changes a shopping list.",
+        "description": "A name that another list has gets `conflict`. Two changes of `isPrivate` get `conflict`\ntoo: making a list that another person shares with the user visible to the account, and\nmaking the account's last shared list private. Scope: `write`.",
+        "operationId": "changeItemList",
+        "parameters": [
+          {
+            "name": "listId",
+            "in": "path",
+            "description": "The list's id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ItemListChanges"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_request`: The request is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid_token`: The access token is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`insufficient_scope`: The user allowed reading only. `premium_required`: The account has no premium.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`conflict`: The change clashes with existing data.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`: The body is too large.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: The body is not JSON.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: The app sent too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server_error`: The API failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "write"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Item lists"
+        ],
+        "summary": "Deletes one of the user's shopping lists, with its items.",
+        "description": "For a list that another person shares with the user, it removes the list from the\nuser's lists and leaves it to its owner. When the deleted list was the default list,\nanother list becomes the default. A deleted list cannot be restored. The last list that\nthe account shares cannot be deleted, even when the user has private lists, and gets\n`conflict`. Scope: `write`.",
+        "operationId": "deleteItemList",
+        "parameters": [
+          {
+            "name": "listId",
+            "in": "path",
+            "description": "The list's id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "401": {
+            "description": "`invalid_token`: The access token is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`insufficient_scope`: The user allowed reading only. `premium_required`: The account has no premium.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`conflict`: The change clashes with existing data.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: The app sent too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server_error`: The API failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/item-lists/{listId}/manual-order": {
+      "put": {
+        "tags": [
+          "Item lists"
+        ],
+        "summary": "Sets the order of a list's items by hand, as the user does in the apps.",
+        "description": "`GET /v1/items` with `order=manual` then returns the items in this order. Items that the\nbody leaves out, and items added later, have no place in the order, and come first. An\nitem id from another list gets `not_found`, and a repeated id gets `invalid_request`.\nScope: `write`.",
+        "operationId": "setManualOrder",
+        "parameters": [
+          {
+            "name": "listId",
+            "in": "path",
+            "description": "The list's id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualOrder"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "description": "`invalid_request`: The request is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid_token`: The access token is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`insufficient_scope`: The user allowed reading only. `premium_required`: The account has no premium.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`: The body is too large.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: The body is not JSON.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: The app sent too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server_error`: The API failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/items/{itemId}": {
+      "patch": {
+        "tags": [
+          "Items"
+        ],
+        "summary": "Changes an item.",
+        "description": "A field left out keeps its value. The `ETag` of `GET /v1/items` changes whenever its\nanswer changes. A check through the API carries no position or store, so it does not\ninfluence how the user's stores sort the list. Scope: `write`.",
+        "operationId": "changeItem",
+        "parameters": [
+          {
+            "name": "itemId",
+            "in": "path",
+            "description": "The item's id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ItemChanges"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Item"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_request`: The request is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid_token`: The access token is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`insufficient_scope`: The user allowed reading only. `premium_required`: The account has no premium.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`: The body is too large.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: The body is not JSON.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: The app sent too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server_error`: The API failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "write"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Items"
+        ],
+        "summary": "Removes an item.",
+        "description": "Scope: `write`.",
+        "operationId": "removeItem",
+        "parameters": [
+          {
+            "name": "itemId",
+            "in": "path",
+            "description": "The item's id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "401": {
+            "description": "`invalid_token`: The access token is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`insufficient_scope`: The user allowed reading only. `premium_required`: The account has no premium.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: The app sent too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server_error`: The API failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/recipe-box": {
+      "get": {
+        "tags": [
+          "Recipe box"
+        ],
+        "summary": "Searches the user's recipe box.",
+        "description": "Without a query, tags or filters, it returns the whole recipe box, one page at a time.\nThe order of recipes that tie under a sort order is not part of the contract, so two\ncalls can split ties differently at a page boundary. Scope: `read`.",
+        "operationId": "searchRecipeBox",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "description": "Optional. Words to search for, in Swedish.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tags",
+            "in": "query",
+            "description": "Optional. Every recipe must have each tag. Repeat the parameter for each tag, as in `tags=vegetariskt` and `tags=snabbt` in one request.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Optional. The default is `relevance`, which puts the best match first when there is a query,\nand the newest recipe first when there is none. `newest` puts the most recently added recipe\nfirst, and `alphabetical` sorts by title. `most_cooked` and `least_cooked` sort by how many\ntimes the user has cooked the recipe. `latest_cooked` and `earliest_cooked` sort by when the\nuser last cooked it, and put recipes the user has never cooked last. `shortest_cooking_time`\nputs recipes without a known time last. `highest_grade` sorts by the user's grade, puts\nrecipes without a grade last, and puts the most cooked first among equal grades. `random`\ngives a new order on each call, so `offset` does not page through it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "maxCookingTime",
+            "in": "query",
+            "description": "Optional. At least 1. Keeps the recipes that take at most this many minutes, and leaves out recipes without a known time.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "minGrade",
+            "in": "query",
+            "description": "Optional. From 1 to 5. Keeps the recipes the user graded at least this high.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "cooked",
+            "in": "query",
+            "description": "Optional. True keeps the recipes the user has cooked, and false the ones the user has never cooked.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "ownRecipesOnly",
+            "in": "query",
+            "description": "Optional. True keeps the recipes written in the app by the user or by someone who shares the recipe box.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Optional. From 1 to 100. The default is 50.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Optional. At least 0. The default is 0.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "include",
+            "in": "query",
+            "description": "Optional. `cookCount`, `lastCookedAt` or both, separated by a comma.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeSearchResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_request`: The request is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid_token`: The access token is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`premium_required`: The account has no premium.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: The app sent too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server_error`: The API failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "read"
+            ]
+          },
+          {
+            "oauth2": [
+              "write"
+            ]
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Recipe box"
+        ],
+        "summary": "Adds a recipe that the app supplies as text.",
+        "description": "The answer is the new recipe as a search lists it. Scope: `write`.",
+        "operationId": "addRecipe",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewRecipe"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_request`: The request is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid_token`: The access token is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`insufficient_scope`: The user allowed reading only. `premium_required`: The account has no premium.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`: The body is too large.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: The body is not JSON.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: The app sent too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server_error`: The API failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/recipe-box/{recipeId}": {
+      "get": {
+        "tags": [
+          "Recipe box"
+        ],
+        "summary": "Returns one recipe from the recipe box, with the user's own changes.",
+        "description": "Scope: `read`.",
+        "operationId": "getRecipe",
+        "parameters": [
+          {
+            "name": "recipeId",
+            "in": "path",
+            "description": "The recipe's id in the recipe box.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "include",
+            "in": "query",
+            "description": "Optional. `cookCount`, `lastCookedAt` or both, separated by a comma.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Recipe"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_request`: The request is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid_token`: The access token is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`premium_required`: The account has no premium.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: The app sent too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server_error`: The API failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "read"
+            ]
+          },
+          {
+            "oauth2": [
+              "write"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Recipe box"
+        ],
+        "summary": "Removes a recipe from the recipe box.",
+        "description": "A removed recipe cannot be restored. A recipe with a meal in the active meal plan gets\n`conflict`, so the app removes the meal first. A recipe whose meal the user cooked\nwithin the last few days can get `conflict` too. Scope: `write`.",
+        "operationId": "deleteRecipe",
+        "parameters": [
+          {
+            "name": "recipeId",
+            "in": "path",
+            "description": "The recipe's id in the recipe box.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "401": {
+            "description": "`invalid_token`: The access token is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`insufficient_scope`: The user allowed reading only. `premium_required`: The account has no premium.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`conflict`: The change clashes with existing data.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: The app sent too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server_error`: The API failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/recipe-box/{recipeId}/ingredients": {
+      "get": {
+        "tags": [
+          "Recipe box"
+        ],
+        "summary": "Returns a recipe's ingredients for a number of portions, with each item once.",
+        "description": "Each ingredient says whether the user probably needs to buy it. Scope: `read`.",
+        "operationId": "getRecipeIngredients",
+        "parameters": [
+          {
+            "name": "recipeId",
+            "in": "path",
+            "description": "The recipe's id in the recipe box.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "portions",
+            "in": "query",
+            "description": "Optional. At least 1. Leave it out for the recipe's own portions.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "listId",
+            "in": "query",
+            "description": "Optional. The list to compare with. Leave it out for the default list.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngredientCollection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_request`: The request is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid_token`: The access token is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`premium_required`: The account has no premium.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: The app sent too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server_error`: The API failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "read"
+            ]
+          },
+          {
+            "oauth2": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/meal-plans/active": {
+      "get": {
+        "tags": [
+          "Active meal plan"
+        ],
+        "summary": "Returns the meals the user plans to cook and has not cooked yet.",
+        "description": "The active meal plan's id in the paths is always `active`. Scope: `read`.",
+        "operationId": "getActiveMealPlan",
+        "parameters": [
+          {
+            "name": "include",
+            "in": "query",
+            "description": "Optional. `ingredients`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MealPlan"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_request`: The request is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid_token`: The access token is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`premium_required`: The account has no premium.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: The app sent too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server_error`: The API failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "read"
+            ]
+          },
+          {
+            "oauth2": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/recipe-box/import": {
+      "post": {
+        "tags": [
+          "Recipe box"
+        ],
+        "summary": "Downloads the recipe on a web page and adds it to the recipe box.",
+        "description": "The answer is `201` when the recipe is new, and `200` when the recipe box already held\nit. When the API cannot add the recipe, the answer is `recipe_import_failed`, and its\n`reason` member says why: `site_not_supported`, `site_denies_import`,\n`unreadable_page`, `multiple_recipes_found`, `no_recipe_found` or `other`. Later\nreleases may add reasons. When the recipe downloader is down or the site does not answer\nin time, the answer is `unavailable`. Scope: `write`.",
+        "operationId": "importRecipe",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecipeImport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeSummary"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_request`: The request is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid_token`: The access token is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`insufficient_scope`: The user allowed reading only. `premium_required`: The account has no premium.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`: The body is too large.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: The body is not JSON.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`recipe_import_failed`: The recipe could not be added.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: The app sent too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server_error`: The API failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`unavailable`: A service that the call needs is unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/meal-plans/active/meals": {
+      "post": {
+        "tags": [
+          "Active meal plan"
+        ],
+        "summary": "Adds meals to the active meal plan, and adds each meal's chosen ingredients to a shopping list.",
+        "description": "The endpoint checks every meal before it adds any. It then adds the meals one at a time,\nand for each meal it saves the meal first and adds the ingredients after. When the list\nfills up partway, the answer is `limit_reached`, and its `meals` member lists every meal\nthe call put in the plan. That includes the meal whose ingredients filled the list, which\nkeeps the ingredients added before the list filled. Another failure partway, such as\n`server_error`, can also leave some meals in the plan, so the app reads the meal plan\nagain before it repeats the call. Scope: `write`.",
+        "operationId": "addMeals",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewMeals"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddedMeals"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_request`: The request is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid_token`: The access token is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`insufficient_scope`: The user allowed reading only. `premium_required`: The account has no premium.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`limit_reached`: The list is full.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`: The body is too large.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: The body is not JSON.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: The app sent too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server_error`: The API failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/meal-plans/active/meals/{mealId}": {
+      "patch": {
+        "tags": [
+          "Active meal plan"
+        ],
+        "summary": "Changes a meal in the active meal plan.",
+        "description": "The id of a meal the user has cooked gets `not_found`. A larger portion count can need\nnew items, and a full list then gets `limit_reached`. The change can then be partly\ndone, so the app should read the meal plan again. Scope: `write`.",
+        "operationId": "changeMeal",
+        "parameters": [
+          {
+            "name": "mealId",
+            "in": "path",
+            "description": "The meal's id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MealChanges"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Meal"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_request`: The request is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid_token`: The access token is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`insufficient_scope`: The user allowed reading only. `premium_required`: The account has no premium.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`limit_reached`: The list is full.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`: The body is too large.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: The body is not JSON.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: The app sent too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server_error`: The API failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "write"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Active meal plan"
+        ],
+        "summary": "Removes a meal from the active meal plan.",
+        "description": "The API also takes back what it added to the shopping list for the meal, and the recipe\nstays in the recipe box. The id of a meal the user has cooked gets `not_found`. Scope:\n`write`.",
+        "operationId": "removeMeal",
+        "parameters": [
+          {
+            "name": "mealId",
+            "in": "path",
+            "description": "The meal's id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "401": {
+            "description": "`invalid_token`: The access token is not valid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`insufficient_scope`: The user allowed reading only. `premium_required`: The account has no premium.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: The app sent too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server_error`: The API failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "write"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AddedItem": {
+        "required": [
+          "id",
+          "listId",
+          "text",
+          "isChecked",
+          "isPermanent",
+          "addedAt",
+          "updatedAt",
+          "mergedIntoExisting"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The item's id."
+          },
+          "listId": {
+            "type": "string",
+            "description": "The id of the list the item is on."
+          },
+          "text": {
+            "type": "string",
+            "description": "The item as the user wrote it, such as `2 l mjölk`."
+          },
+          "isChecked": {
+            "type": "boolean",
+            "description": "True when the user has checked the item off."
+          },
+          "isPermanent": {
+            "type": "boolean",
+            "description": "True when the item stays on the list after shopping."
+          },
+          "addedAt": {
+            "type": "string",
+            "description": "When the item was added.",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "description": "When the item last changed.",
+            "format": "date-time"
+          },
+          "mergedIntoExisting": {
+            "type": "boolean",
+            "description": "True when the text merged into an item already on the list, because the two name the same thing."
+          }
+        },
+        "description": "An item that a text added, or the item already on the list that the text merged into."
+      },
+      "AddedItemCollection": {
+        "required": [
+          "items"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AddedItem"
+            },
+            "description": "One entry per text, in the order of `texts`."
+          }
+        }
+      },
+      "AddedMeals": {
+        "required": [
+          "meals"
+        ],
+        "type": "object",
+        "properties": {
+          "meals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Meal"
+            },
+            "description": "The meals the call added, one per entry, in the order of the body."
+          }
+        }
+      },
+      "Department": {
+        "required": [
+          "items"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Item"
+            },
+            "description": "The list's items in the department."
+          }
+        },
+        "description": "One department of a store, with the list's items that belong there."
+      },
+      "FavoriteCollection": {
+        "required": [
+          "favorites"
+        ],
+        "type": "object",
+        "properties": {
+          "favorites": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ItemText"
+            },
+            "description": "The items the user buys often."
+          }
+        }
+      },
+      "Ingredient": {
+        "required": [
+          "text",
+          "probablyNeeded"
+        ],
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The ingredient, as an item text."
+          },
+          "probablyNeeded": {
+            "type": "boolean",
+            "description": "False when most people have the item at home, or when it has no amount and the list has an unchecked item with exactly the same text."
+          }
+        },
+        "description": "An ingredient of a recipe, as an item to buy."
+      },
+      "IngredientCollection": {
+        "required": [
+          "ingredients"
+        ],
+        "type": "object",
+        "properties": {
+          "ingredients": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Ingredient"
+            },
+            "description": "The ingredients, with each item once."
+          }
+        }
+      },
+      "Item": {
+        "required": [
+          "id",
+          "listId",
+          "text",
+          "isChecked",
+          "isPermanent",
+          "addedAt",
+          "updatedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The item's id."
+          },
+          "listId": {
+            "type": "string",
+            "description": "The id of the list the item is on."
+          },
+          "text": {
+            "type": "string",
+            "description": "The item as the user wrote it, such as `2 l mjölk`."
+          },
+          "isChecked": {
+            "type": "boolean",
+            "description": "True when the user has checked the item off."
+          },
+          "isPermanent": {
+            "type": "boolean",
+            "description": "True when the item stays on the list after shopping."
+          },
+          "addedAt": {
+            "type": "string",
+            "description": "When the item was added.",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "description": "When the item last changed.",
+            "format": "date-time"
+          }
+        },
+        "description": "An item on a shopping list. A checked item that is not permanent leaves the list 180\nminutes after it was checked. A permanent item always reports isChecked as false."
+      },
+      "ItemChanges": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The new text. It must not be empty, and must be at most 200 characters."
+          },
+          "listId": {
+            "type": "string",
+            "description": "The id of a list to move the item to."
+          },
+          "isPermanent": {
+            "type": "boolean",
+            "description": "True keeps the item on the list after shopping."
+          },
+          "isChecked": {
+            "type": "boolean",
+            "description": "True checks the item off, and false unchecks it. A value the item has already changes nothing."
+          }
+        },
+        "description": "The changes to an item. A field left out keeps its value, and the body must hold at least one field."
+      },
+      "ItemCollection": {
+        "required": [
+          "items"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Item"
+            },
+            "description": "The items."
+          }
+        }
+      },
+      "ItemList": {
+        "required": [
+          "id",
+          "name",
+          "isDefault",
+          "isPrivate"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The list's id."
+          },
+          "name": {
+            "type": "string",
+            "description": "The list's name."
+          },
+          "isDefault": {
+            "type": "boolean",
+            "description": "True for the list that items go to when the app names no list."
+          },
+          "isPrivate": {
+            "type": "boolean",
+            "description": "False when everyone who shares the user's account sees the list. True for the user's\nown private lists, and for lists that another person shares with the user."
+          }
+        },
+        "description": "A shopping list."
+      },
+      "ItemListChanges": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The new name, from 1 to 50 characters, and not only spaces."
+          },
+          "isPrivate": {
+            "type": "boolean",
+            "description": "True hides the list from the others who share the account, and false shows it to them."
+          }
+        },
+        "description": "The changes to a shopping list. The body must hold at least one field."
+      },
+      "ItemListCollection": {
+        "required": [
+          "itemLists"
+        ],
+        "type": "object",
+        "properties": {
+          "itemLists": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ItemList"
+            },
+            "description": "The user's shopping lists, including lists that others share with the user."
+          }
+        }
+      },
+      "ItemText": {
+        "required": [
+          "text"
+        ],
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The text, such as `mjölk`."
+          }
+        },
+        "description": "An item text."
+      },
+      "ManualOrder": {
+        "required": [
+          "itemIds"
+        ],
+        "type": "object",
+        "properties": {
+          "itemIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Required. The ids of the list's items in the wanted order. Each id must belong to the list, and may appear once."
+          }
+        },
+        "description": "The order of a list's items."
+      },
+      "Me": {
+        "required": [
+          "id",
+          "displayName",
+          "premiumExpiresAt",
+          "isFamilyPremium"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "A stable id for the person, the same across all of their sign-in methods."
+          },
+          "displayName": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The name the app shows for the account, or null when the account has none."
+          },
+          "premiumExpiresAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "When the purchase behind premium ends. Null when no purchase gives an end date, such as premium that does not end.",
+            "format": "date-time"
+          },
+          "isFamilyPremium": {
+            "type": "boolean",
+            "description": "True when the purchase behind the account's premium is a family purchase."
+          }
+        },
+        "description": "The account the token acts for."
+      },
+      "Meal": {
+        "required": [
+          "id",
+          "type",
+          "recipeId",
+          "title",
+          "portions",
+          "occasion",
+          "isPurchased",
+          "isCooked"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The meal's id, which the paths call `mealId`."
+          },
+          "type": {
+            "type": "string",
+            "description": "What the meal is: `recipe` or `title`. Later releases may add values, and an app must handle a value it does not know."
+          },
+          "recipeId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The recipe's id in the recipe box. Null for a `title` meal."
+          },
+          "title": {
+            "type": "string",
+            "description": "The recipe's title, or the title the user gave a `title` meal."
+          },
+          "portions": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The planned portions, such as `4` or `5/2`."
+          },
+          "occasion": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "When the user plans to cook it, in their own words, such as `fredag`."
+          },
+          "isPurchased": {
+            "type": "boolean",
+            "description": "True when the user has bought what the meal needs."
+          },
+          "isCooked": {
+            "type": "boolean",
+            "description": "True once the user has cooked it. A cooked meal leaves the active meal plan."
+          },
+          "ingredients": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional. The ingredients for the planned portions. A `title` meal has none."
+          }
+        },
+        "description": "A meal in the active meal plan."
+      },
+      "MealChanges": {
+        "type": "object",
+        "properties": {
+          "portions": {
+            "type": "string",
+            "description": "A whole number such as `2`, or a fraction such as `1/2` or `3/2`, as a meal's `portions`\nreads. It must be more than 0, with a numerator and a denominator of at most 32,767. A\nchange also scales what the API added to the list for the meal, and keeps what the user\nadded by hand. A `title` meal has no portions to change."
+          },
+          "occasion": {
+            "type": "string",
+            "description": "When the user plans to cook it, in at most 50 characters. An empty string clears it."
+          },
+          "isPurchased": {
+            "type": "boolean",
+            "description": "`true` marks the meal as bought. `false` is not allowed."
+          },
+          "isCooked": {
+            "type": "boolean",
+            "description": "`true` marks the meal as cooked, and it leaves the active meal plan. The body must hold no other field. `false` is not allowed."
+          }
+        },
+        "description": "The changes to a meal. The body must hold at least one field."
+      },
+      "MealPlan": {
+        "required": [
+          "meals"
+        ],
+        "type": "object",
+        "properties": {
+          "meals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Meal"
+            },
+            "description": "The meals the user plans to cook and has not cooked yet."
+          }
+        }
+      },
+      "NewItemList": {
+        "required": [
+          "name"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Required. From 1 to 50 characters, and not only spaces."
+          },
+          "isPrivate": {
+            "type": "boolean",
+            "description": "True makes the list the user's own, hidden from the others who share the account. The default is false."
+          }
+        },
+        "description": "A new shopping list."
+      },
+      "NewItems": {
+        "required": [
+          "texts"
+        ],
+        "type": "object",
+        "properties": {
+          "texts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Required. From 1 to 50 texts. Each one must not be empty, and must be at most 200 characters."
+          },
+          "listId": {
+            "type": "string",
+            "description": "The id of the list. Leave it out for the default list."
+          }
+        },
+        "description": "The items to add to a shopping list."
+      },
+      "NewMeal": {
+        "required": [
+          "type",
+          "recipeId",
+          "ingredients"
+        ],
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Required. `recipe`, because v1 adds no `title` meals."
+          },
+          "recipeId": {
+            "type": "string",
+            "description": "Required. The recipe's id in the recipe box."
+          },
+          "ingredients": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Required. The texts to add to the list, taken from the `text` of the entries that\n`GET /v1/recipe-box/{recipeId}/ingredients` returns. None of them may be empty, and a\nrepeated text is added once. An empty array adds nothing and marks the meal as bought.\nThe meals of one call hold at most 200 ingredients together, counting every entry."
+          },
+          "occasion": {
+            "type": "string",
+            "description": "When the user plans to cook it, in at most 50 characters."
+          },
+          "portions": {
+            "type": "string",
+            "description": "A whole number such as `2`, or a fraction such as `1/2` or `3/2`, as a meal's `portions`\nreads. It must be more than 0, with a numerator and a denominator of at most 32,767. Leave\nit out for the portions the user selected, or else the recipe's own."
+          },
+          "listId": {
+            "type": "string",
+            "description": "The id of the list to add the ingredients to. Leave it out for the default list."
+          }
+        },
+        "description": "A meal to add to the active meal plan."
+      },
+      "NewMeals": {
+        "required": [
+          "meals"
+        ],
+        "type": "object",
+        "properties": {
+          "meals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NewMeal"
+            },
+            "description": "Required. From 1 to 20 meals, with at most 200 ingredients in all of them together."
+          }
+        },
+        "description": "The meals to add to the active meal plan."
+      },
+      "NewRecipe": {
+        "required": [
+          "title",
+          "ingredients"
+        ],
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Required. From 1 to 200 characters."
+          },
+          "ingredients": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Required. One ingredient per entry, such as `2 dl mjölk`. All entries together hold at\nmost 4,000 characters, counting one for each line break between two entries."
+          },
+          "instructions": {
+            "type": "string",
+            "description": "How to cook it, in at most 4,000 characters."
+          },
+          "portions": {
+            "type": "integer",
+            "description": "How many portions the ingredients are for, from 1 to 32,767.",
+            "format": "int32"
+          },
+          "description": {
+            "type": "string",
+            "description": "A short description of the dish, in at most 4,000 characters."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "At most 20 tags, each from 1 to 50 characters and without a plus sign."
+          }
+        },
+        "description": "A recipe that the app supplies as text."
+      },
+      "Problem": {
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "detail"
+        ],
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "A link to the code's description in the errors guide."
+          },
+          "title": {
+            "type": "string",
+            "description": "A short English description of the code, the same for every answer with that code."
+          },
+          "status": {
+            "type": "integer",
+            "description": "The HTTP status.",
+            "format": "int32"
+          },
+          "code": {
+            "type": "string",
+            "description": "The error code, which apps branch on."
+          },
+          "detail": {
+            "type": "string",
+            "description": "An English sentence about this answer, for a developer to read."
+          },
+          "errors": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "description": "Only with `invalid_request`. Each key names a parameter or body field, and its\nvalue lists what is wrong with it."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Only with `limit_reached`. The most items the list may hold.",
+            "format": "int32"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "required": [
+                "id",
+                "listId",
+                "text",
+                "isChecked",
+                "isPermanent",
+                "addedAt",
+                "updatedAt",
+                "mergedIntoExisting"
+              ],
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "The item's id."
+                },
+                "listId": {
+                  "type": "string",
+                  "description": "The id of the list the item is on."
+                },
+                "text": {
+                  "type": "string",
+                  "description": "The item as the user wrote it, such as `2 l mjölk`."
+                },
+                "isChecked": {
+                  "type": "boolean",
+                  "description": "True when the user has checked the item off."
+                },
+                "isPermanent": {
+                  "type": "boolean",
+                  "description": "True when the item stays on the list after shopping."
+                },
+                "addedAt": {
+                  "type": "string",
+                  "description": "When the item was added.",
+                  "format": "date-time"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "description": "When the item last changed.",
+                  "format": "date-time"
+                },
+                "mergedIntoExisting": {
+                  "type": "boolean",
+                  "description": "True when the text merged into an item already on the list, because the two name the same thing."
+                }
+              },
+              "description": "An item that a text added, or the item already on the list that the text merged into."
+            },
+            "description": "Only with `limit_reached` from `POST /v1/items`. The entries added before the\nlist filled up, which can be none."
+          },
+          "meals": {
+            "type": "array",
+            "items": {
+              "required": [
+                "id",
+                "type",
+                "recipeId",
+                "title",
+                "portions",
+                "occasion",
+                "isPurchased",
+                "isCooked"
+              ],
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "The meal's id, which the paths call `mealId`."
+                },
+                "type": {
+                  "type": "string",
+                  "description": "What the meal is: `recipe` or `title`. Later releases may add values, and an app must handle a value it does not know."
+                },
+                "recipeId": {
+                  "type": [
+                    "null",
+                    "string"
+                  ],
+                  "description": "The recipe's id in the recipe box. Null for a `title` meal."
+                },
+                "title": {
+                  "type": "string",
+                  "description": "The recipe's title, or the title the user gave a `title` meal."
+                },
+                "portions": {
+                  "type": [
+                    "null",
+                    "string"
+                  ],
+                  "description": "The planned portions, such as `4` or `5/2`."
+                },
+                "occasion": {
+                  "type": [
+                    "null",
+                    "string"
+                  ],
+                  "description": "When the user plans to cook it, in their own words, such as `fredag`."
+                },
+                "isPurchased": {
+                  "type": "boolean",
+                  "description": "True when the user has bought what the meal needs."
+                },
+                "isCooked": {
+                  "type": "boolean",
+                  "description": "True once the user has cooked it. A cooked meal leaves the active meal plan."
+                },
+                "ingredients": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Optional. The ingredients for the planned portions. A `title` meal has none."
+                }
+              },
+              "description": "A meal in the active meal plan."
+            },
+            "description": "Only with `limit_reached` from `POST /v1/meal-plans/active/meals`. The meals\nthat the call put in the plan, including the one whose ingredients filled the list."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Only with `recipe_import_failed`. Why the API could not add the recipe."
+          }
+        },
+        "description": "An error answer: an RFC 9457 problem with a `code` member, which apps branch on. The\nerrors guide describes each code."
+      },
+      "Recipe": {
+        "required": [
+          "description",
+          "portions",
+          "selectedPortions",
+          "portionType",
+          "ingredients",
+          "instructions",
+          "advice",
+          "notes",
+          "url",
+          "id",
+          "title",
+          "tags",
+          "grade",
+          "cookingTime"
+        ],
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "A short description of the dish."
+          },
+          "portions": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "description": "How many portions the recipe's own ingredients are for.",
+            "format": "int32"
+          },
+          "selectedPortions": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The portions the user selected in the app, which `ingredients` is scaled to, such as `4` or `5/2`."
+          },
+          "portionType": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "What a portion is."
+          },
+          "ingredients": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "One line per ingredient. A line can also head a group of ingredients."
+          },
+          "instructions": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "How to cook it."
+          },
+          "advice": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Tips that come with the recipe."
+          },
+          "notes": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The user's own notes."
+          },
+          "url": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The web page the recipe came from."
+          },
+          "id": {
+            "type": "string",
+            "description": "The recipe's id in the user's recipe box."
+          },
+          "title": {
+            "type": "string",
+            "description": "The title, with the user's own changes."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The user's tags, in alphabetical order."
+          },
+          "grade": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "description": "The user's grade, from 1 to 5.",
+            "format": "int32"
+          },
+          "cookingTime": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "description": "The minutes it takes, as the user set it, or else the recipe's rough time: 10, 30, 50 or 90.",
+            "format": "int32"
+          },
+          "cookCount": {
+            "type": "integer",
+            "description": "Optional. How many times the user has cooked it.",
+            "format": "int32"
+          },
+          "lastCookedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Optional. When the user last cooked it.",
+            "format": "date-time"
+          }
+        },
+        "description": "A recipe in the user's recipe box, with the user's own changes."
+      },
+      "RecipeImport": {
+        "required": [
+          "url"
+        ],
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Required. An absolute `http` or `https` address."
+          }
+        },
+        "description": "The web page of a recipe to add."
+      },
+      "RecipeSearchResult": {
+        "required": [
+          "recipes",
+          "totalCount"
+        ],
+        "type": "object",
+        "properties": {
+          "recipes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecipeSummary"
+            },
+            "description": "One page of the recipes that matched."
+          },
+          "totalCount": {
+            "type": "integer",
+            "description": "How many recipes matched in all.",
+            "format": "int32"
+          }
+        }
+      },
+      "RecipeSummary": {
+        "required": [
+          "id",
+          "title",
+          "tags",
+          "grade",
+          "cookingTime"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The recipe's id in the user's recipe box."
+          },
+          "title": {
+            "type": "string",
+            "description": "The title, with the user's own changes."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The user's tags, in alphabetical order."
+          },
+          "grade": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "description": "The user's grade, from 1 to 5.",
+            "format": "int32"
+          },
+          "cookingTime": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "description": "The minutes it takes, as the user set it, or else the recipe's rough time: 10, 30, 50 or 90.",
+            "format": "int32"
+          },
+          "cookCount": {
+            "type": "integer",
+            "description": "Optional. How many times the user has cooked it.",
+            "format": "int32"
+          },
+          "lastCookedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Optional. When the user last cooked it.",
+            "format": "date-time"
+          }
+        },
+        "description": "A recipe in the user's recipe box, as a search lists it."
+      },
+      "SortedItems": {
+        "required": [
+          "departments",
+          "unplacedItems"
+        ],
+        "type": "object",
+        "properties": {
+          "departments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Department"
+            },
+            "description": "The departments in the order the user walks through the store."
+          },
+          "unplacedItems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Item"
+            },
+            "description": "The items that the API cannot place in a department. It holds every item when the API knows too little about the store's layout."
+          }
+        },
+        "description": "A list's items grouped by a store's departments."
+      },
+      "Store": {
+        "required": [
+          "id",
+          "name",
+          "address",
+          "city",
+          "latitude",
+          "longitude",
+          "isFavorite",
+          "lastVisitedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The store's id."
+          },
+          "name": {
+            "type": "string",
+            "description": "The store's name."
+          },
+          "address": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The street address."
+          },
+          "city": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The city."
+          },
+          "latitude": {
+            "type": [
+              "null",
+              "number"
+            ],
+            "description": "The store's latitude, in degrees.",
+            "format": "double"
+          },
+          "longitude": {
+            "type": [
+              "null",
+              "number"
+            ],
+            "description": "The store's longitude, in degrees.",
+            "format": "double"
+          },
+          "isFavorite": {
+            "type": "boolean",
+            "description": "True when the user marked the store as a favorite."
+          },
+          "lastVisitedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "When the user last shopped there with the app.",
+            "format": "date-time"
+          }
+        },
+        "description": "A store the user has shopped in or marked as a favorite."
+      },
+      "StoreCollection": {
+        "required": [
+          "stores"
+        ],
+        "type": "object",
+        "properties": {
+          "stores": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Store"
+            },
+            "description": "The stores."
+          }
+        }
+      },
+      "SuggestionCollection": {
+        "required": [
+          "suggestions"
+        ],
+        "type": "object",
+        "properties": {
+          "suggestions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ItemText"
+            },
+            "description": "The item texts that complete the query, best first."
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "oauth2": {
+        "type": "oauth2",
+        "description": "The authorization code flow with PKCE. The signing-in guide describes it.",
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "https://auth.alacart.io/connect/authorize",
+            "tokenUrl": "https://auth.alacart.io/connect/token",
+            "refreshUrl": "https://auth.alacart.io/connect/token",
+            "scopes": {
+              "read": "Read the user's lists, items, recipes, meal plan and stores.",
+              "write": "Read everything that read allows, and change it."
+            }
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Account"
+    },
+    {
+      "name": "Item lists"
+    },
+    {
+      "name": "Items"
+    },
+    {
+      "name": "Stores"
+    },
+    {
+      "name": "Recipe box"
+    },
+    {
+      "name": "Active meal plan"
+    }
+  ]
+}

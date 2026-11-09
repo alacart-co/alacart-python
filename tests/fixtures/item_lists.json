@@ -1,0 +1,16 @@
+{
+  "itemLists": [
+    {
+      "id": "9001",
+      "name": "Handla",
+      "isDefault": true,
+      "isPrivate": false
+    },
+    {
+      "id": "9002",
+      "name": "Bygghandeln",
+      "isDefault": false,
+      "isPrivate": true
+    }
+  ]
+}

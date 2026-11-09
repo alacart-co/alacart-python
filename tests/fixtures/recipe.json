@@ -1,0 +1,27 @@
+{
+  "id": "5501",
+  "title": "Pannkakor",
+  "tags": [
+    "barnvänligt",
+    "snabbt"
+  ],
+  "grade": 5,
+  "cookingTime": 30,
+  "description": "Tunna pannkakor med sylt.",
+  "portions": 4,
+  "selectedPortions": "5/2",
+  "portionType": "personer",
+  "ingredients": [
+    "Smet",
+    "3 dl vetemjöl",
+    "6 dl mjölk",
+    "3 ägg",
+    "1/2 tsk salt",
+    "Till servering",
+    "sylt"
+  ],
+  "instructions": "Vispa ihop smeten och stek tunna pannkakor.",
+  "advice": null,
+  "notes": "Dubbel sats till kalaset.",
+  "url": "https://example.com/pannkakor"
+}

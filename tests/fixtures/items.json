@@ -1,0 +1,31 @@
+{
+  "items": [
+    {
+      "id": "77003",
+      "listId": "9001",
+      "text": "2 l mjölk",
+      "isChecked": false,
+      "isPermanent": false,
+      "addedAt": "2026-11-08T09:12:45Z",
+      "updatedAt": "2026-11-08T09:12:45Z"
+    },
+    {
+      "id": "77002",
+      "listId": "9001",
+      "text": "bröd",
+      "isChecked": true,
+      "isPermanent": false,
+      "addedAt": "2026-11-07T18:00:00Z",
+      "updatedAt": "2026-11-08T08:59:30Z"
+    },
+    {
+      "id": "77001",
+      "listId": "9002",
+      "text": "skruv 4x40",
+      "isChecked": false,
+      "isPermanent": true,
+      "addedAt": "2026-10-30T12:00:00Z",
+      "updatedAt": "2026-10-30T12:00:00Z"
+    }
+  ]
+}

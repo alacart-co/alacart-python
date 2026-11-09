@@ -1,0 +1,7 @@
+{
+  "type": "https://api.test.alacart.io/docs#errors-premium_required",
+  "title": "Premium required",
+  "status": 403,
+  "code": "premium_required",
+  "detail": "The account has no premium."
+}

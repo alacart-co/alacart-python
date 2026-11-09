@@ -1,0 +1,24 @@
+{
+  "items": [
+    {
+      "id": "77004",
+      "listId": "9001",
+      "text": "ägg",
+      "isChecked": false,
+      "isPermanent": false,
+      "addedAt": "2026-11-08T10:00:00Z",
+      "updatedAt": "2026-11-08T10:00:00Z",
+      "mergedIntoExisting": false
+    },
+    {
+      "id": "77003",
+      "listId": "9001",
+      "text": "3 l mjölk",
+      "isChecked": false,
+      "isPermanent": false,
+      "addedAt": "2026-11-08T09:12:45Z",
+      "updatedAt": "2026-11-08T10:00:00Z",
+      "mergedIntoExisting": true
+    }
+  ]
+}
